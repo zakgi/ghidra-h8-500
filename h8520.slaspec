@@ -847,6 +847,15 @@ reloffs16: reloc is disp16       [ reloc=(inst_next & 0xFF0000) | ((inst_next+di
 :stc.b        CR8,eab_postinc           is eab_postinc;          opcode=19 & CR8                 { eab_postinc = CR8; }
 :stc.b        CR8,eab_abs8_br           is eab_abs8_br;          opcode=19 & CR8                 { eab_abs8_br = CR8; }
 :stc.b        CR8,eab_abs16             is eab_abs16;            opcode=19 & CR8                 { eab_abs16 = CR8; }
+
+# STC.B CR,@-SP : non-canonical encoding emitted by Hitachi/Roland compilers.
+# sz=1 in the EA byte selects word-aligned predecrement (SP -= 2) for stack
+# alignment; ccc in the opcode byte already pins down byte-sized CR. The H8/500
+# CPU ignores sz for byte-CR stores and still adjusts SP by 2. Keep both these
+# constructors alongside the canonical eab_predec form above.
+:stc.b        "CCR","@-SP"              is Rn=7 & mode=11 & sz=1; opcode=19 & CR8=1   { CollectFlags(); SP24 = SP24 - 2; *:1 SP24 = CCR; }
+:stc.b        CR8,"@-SP"                is Rn=7 & mode=11 & sz=1; opcode=19 & CR8     { SP24 = SP24 - 2; *:1 SP24 = CR8; }
+
 :stc.w        CR16,eaw_direct           is eaw_direct;           opcode=19 & CR16                { eaw_direct = CR16; }
 :stc.w        CR16,eaw_indirect         is eaw_indirect;         opcode=19 & CR16                { eaw_indirect = CR16; }
 :stc.w        CR16,eaw_disp8            is eaw_disp8;            opcode=19 & CR16                { eaw_disp8 = CR16; }
@@ -1089,6 +1098,13 @@ reloffs16: reloc is disp16       [ reloc=(inst_next & 0xFF0000) | ((inst_next+di
 :ldc.w        eaw_abs8_br,CR16             is eaw_abs8_br;         opcode=17 & CR16                { CR16 = eaw_abs8_br; }
 :ldc.w        eaw_abs16,CR16            is eaw_abs16;        opcode=17 & CR16                { CR16 = eaw_abs16; }
 :ldc.w        eaw_imm16,CR16            is eaw_imm16;        opcode=17 & CR16                { CR16 = eaw_imm16; }
+
+# LDC.B @SP+,CR : non-canonical pop counterpart to the @-SP store above.
+# sz=1 in the EA byte selects word-aligned postincrement (SP += 2); the byte CR
+# is loaded from the byte at SP. Used in ISR epilogues to restore page registers
+# while keeping the stack word-aligned.
+:ldc.b        "@SP+","CCR"              is Rn=7 & mode=12 & sz=1; opcode=17 & CR8=1   { CCR = *:1 SP24; SP24 = SP24 + 2; SpreadFlags(); }
+:ldc.b        "@SP+",CR8                is Rn=7 & mode=12 & sz=1; opcode=17 & CR8     { CR8 = *:1 SP24; SP24 = SP24 + 2; }
 
 # CLR   <EAd>              Clear
 #       N: 0
