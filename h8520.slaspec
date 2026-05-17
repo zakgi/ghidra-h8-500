@@ -1769,6 +1769,14 @@ absaddr24: "@"^addr24^":24" is addr24 { export * addr24; }
 	SP24 = SP24 + 2;
 }
 
+# SLEEP                    Halt CPU until next interrupt
+#       no flags
+# Confirmed against Nuked-SC55 mcu_opcodes.cpp (MCU_Operand_Sleep, entry 0x1A).
+# The pcodeop keeps the semantics opaque to the decompiler so it doesn't
+# fold the idle-loop body away to nothing.
+define pcodeop sleep_h8;
+:sleep                                  is opcode_special=0x1A { sleep_h8(); }
+
 r6b_disp8: "@("^disp8^":8","FP"^")" is disp8 {
 	local addr:3 = FP24 + disp8;
 	export *:1 addr;
