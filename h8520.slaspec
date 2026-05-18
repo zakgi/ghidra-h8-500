@@ -24,15 +24,26 @@ define register offset=0x0d size=3 [FP24];
 define register offset=0x13 size=3 [SP24];
 define register offset=0x20 size=2 [_ SR];
 define register offset=0x20 size=1 [_ _ _ CCR _ DP EP _ BR];
-define register offset=0x40 size=4 [contextreg];
+define register offset=0x40 size=8 [contextreg];
 define register offset=0x60 size=1 [CF VF ZF NF];
 define register offset=0x80 size=1 [CP];
 define register offset=0x80 size=3 [PC];
 define register offset=0x81 size=2 [PC16];
 
+# Context fields for the H8/500 page registers. Each holds a propagated,
+# decode-time copy of the matching runtime register, set whenever a
+# constructor writes the runtime register with a constant value (LDC.B #imm
+# for DP/EP/TP/BR, PJMP/PJSR absaddr24 for CP). Address-computing
+# constructors consult these fields so 24-bit targets can be resolved at
+# analysis time without depending on the decompiler's runtime tracking.
 define context contextreg
 	targetBase = (0,2)
-	targetReg = (0,2);
+	targetReg = (0,2)
+	DP_ctx = (8,15)
+	EP_ctx = (16,23)
+	TP_ctx = (24,31)
+	BR_ctx = (32,39)
+	CP_ctx = (40,47);
 
 #@define CF    "SR[0,1]"
 #@define VF    "SR[1,1]"
@@ -378,6 +389,12 @@ Rn32: "R2" is Rn = 2 { value:4 = zext(R2 << 16) | zext(R3); export value; }
 Rn32: "R4" is Rn = 4 { value:4 = zext(R4 << 16) | zext(R5); export value; }
 Rn32: "FP" is Rn = 6 { value:4 = zext(FP << 16) | zext(SP); export value; }
 
+# Addressing sub-tables read the runtime page registers (DP/EP/TP/BR). The
+# *_ctx context fields cannot be used in pcode bodies under this SLEIGH build
+# (parser rejects them in zext), so we leave the pcode untouched and rely on
+# the constant-propagation analyzer to track the LDC.B writes. The context
+# infrastructure (declarations + globalset on LDC.B / PJMP / PJSR) is still in
+# place for the disassembler's flow analysis.
 addr8_br: addr8 is addr8 {
 	local addr:3 = (zext(BR) << 8) | addr8;
 	export addr;
@@ -484,6 +501,13 @@ eaw_imm16:        i16                       is Rn=4 & sz=1 & mode=0; i16        
 
 reloffs8:  reloc is disp8        [ reloc=(inst_next & 0xFF0000) | ((inst_next+disp8) & 0xFFFF);  ] { export * reloc; }
 reloffs16: reloc is disp16       [ reloc=(inst_next & 0xFF0000) | ((inst_next+disp16) & 0xFFFF); ] { export * reloc; }
+
+# Absolute-but-same-page 16-bit target. Splices the current CP (= inst_next
+# high byte) with the 16-bit operand into a real 24-bit address at decode
+# time, so the operand printed in the listing is the resolved target and
+# Ghidra creates one clean operand-level reference. Avoids the spurious
+# OP-0 page-0 reference that the bare addr16 form provokes.
+absoffs16: reloc is addr16       [ reloc=(inst_next & 0xFF0000) | addr16; ] { export * reloc; }
 
 
 # MOV:G <EAs>,Rd           Move data from source to destination, general format
@@ -1070,7 +1094,23 @@ reloffs16: reloc is disp16       [ reloc=(inst_next & 0xFF0000) | ((inst_next+di
 :ldc.b        eab_postinc,"TP"           is eab_postinc;      opcode=17 & CR8=7                 { TP  = eab_postinc; SpreadFlags(); FPH = TP; }
 :ldc.b        eab_abs8_br,"TP"              is eab_abs8_br;         opcode=17 & CR8=7                 { TP  = eab_abs8_br; SpreadFlags(); FPH = TP; }
 :ldc.b        eab_abs16,"TP"             is eab_abs16;        opcode=17 & CR8=7                 { TP  = eab_abs16; SpreadFlags(); FPH = TP; }
-:ldc.b        eab_imm8,"TP"              is eab_imm8;         opcode=17 & CR8=7                 { TP  = eab_imm8; SpreadFlags(); FPH = TP; }
+# LDC.B #imm,<page reg> -- bypass the eab_imm8 sub-table so `imm8` is a
+# constructor-local symbol visible to the disassembly action. The pattern
+# expansion (Rn=4 & sz=0 & mode=0; imm8) matches the same bytes eab_imm8
+# would have matched, and the body uses imm8 directly.
+:ldc.b        "#"^imm8^":8","TP"         is Rn=4 & sz=0 & mode=0; imm8;  opcode=17 & CR8=7
+    [TP_ctx = imm8; globalset(inst_next, TP_ctx);]
+    { TP  = imm8; SpreadFlags(); FPH = TP; }
+:ldc.b        "#"^imm8^":8","BR"         is Rn=4 & sz=0 & mode=0; imm8;  opcode=17 & CR8=3
+    [BR_ctx = imm8; globalset(inst_next, BR_ctx);]
+    { BR = imm8; }
+:ldc.b        "#"^imm8^":8","EP"         is Rn=4 & sz=0 & mode=0; imm8;  opcode=17 & CR8=4
+    [EP_ctx = imm8; globalset(inst_next, EP_ctx);]
+    { EP = imm8; }
+:ldc.b        "#"^imm8^":8","DP"         is Rn=4 & sz=0 & mode=0; imm8;  opcode=17 & CR8=5
+    [DP_ctx = imm8; globalset(inst_next, DP_ctx);]
+    { DP = imm8; }
+
 :ldc.w        eaw_direct,"SR"           is eaw_direct;       opcode=17 & CR16=0                { SR = eaw_direct; SpreadFlags(); }
 :ldc.w        eaw_indirect,"SR"         is eaw_indirect;     opcode=17 & CR16=0                { SR = eaw_indirect; SpreadFlags(); }
 :ldc.w        eaw_disp8,"SR"            is eaw_disp8;        opcode=17 & CR16=0                { SR = eaw_disp8; SpreadFlags(); }
@@ -1220,6 +1260,20 @@ reloffs16: reloc is disp16       [ reloc=(inst_next & 0xFF0000) | ((inst_next+di
 :cmp:"g.w"    i16,eaw_abs8_br          is eaw_abs8_br;   opcode_special=5; i16 { subflags(eaw_abs8_br, i16); }
 :cmp:"g.w"    i16,eaw_abs16            is eaw_abs16;     opcode_special=5; i16 { subflags(eaw_abs16, i16); }
 :cmp:"g.b"    i16,eaw_imm16            is eaw_imm16;     opcode_special=5; i16 { subflags(eaw_imm16, i16); }
+
+# CMP:G.B  #imm:16, <EAd>  -- byte EA, 16-bit immediate (low 8 bits used)
+# H8/500 reads a 16-bit immediate from the stream but performs a byte compare.
+# Confirmed against Nuked-SC55 MCU_Opcode_MOVG_Immediate (opcode_reg==5 with
+# operand_size=BYTE branch in mcu_opcodes.cpp). Emitted by Hitachi's compiler
+# to keep encoding layout uniform with the word-EA CMP forms above.
+:cmp:"g.b"    i16,eab_direct           is eab_direct;    opcode_special=5; i16 { subflags(eab_direct[0,8], i16[0,8]); }
+:cmp:"g.b"    i16,eab_indirect         is eab_indirect;  opcode_special=5; i16 { subflags(eab_indirect,    i16[0,8]); }
+:cmp:"g.b"    i16,eab_disp8            is eab_disp8;     opcode_special=5; i16 { subflags(eab_disp8,       i16[0,8]); }
+:cmp:"g.b"    i16,eab_disp16           is eab_disp16;    opcode_special=5; i16 { subflags(eab_disp16,      i16[0,8]); }
+:cmp:"g.b"    i16,eab_predec           is eab_predec;    opcode_special=5; i16 { subflags(eab_predec,      i16[0,8]); }
+:cmp:"g.b"    i16,eab_postinc          is eab_postinc;   opcode_special=5; i16 { subflags(eab_postinc,     i16[0,8]); }
+:cmp:"g.b"    i16,eab_abs8_br          is eab_abs8_br;   opcode_special=5; i16 { subflags(eab_abs8_br,     i16[0,8]); }
+:cmp:"g.b"    i16,eab_abs16            is eab_abs16;     opcode_special=5; i16 { subflags(eab_abs16,       i16[0,8]); }
 
 # CMP:E #xx:8,Rd           Compare:E, short format
 #       N: result s< 0
@@ -1577,10 +1631,17 @@ reloffs16: reloc is disp16       [ reloc=(inst_next & 0xFF0000) | ((inst_next+di
 	addr:3 = 0; #zext(*:2 Rn_banked) | (zext(CP) << 16);
 	goto [addr];
 }
-:jmp       "@"^addr16_dp^":16"         is opcode_special=0x10; addr16_dp [targetBase=0;]
+:jmp       absoffs16                   is opcode_special=0x10; addr16 & absoffs16
 {
-	addr:3 = zext(*:2 addr16_dp) | (zext(CP) << 16);
-	goto [addr];
+	# Same-page direct JMP. Confirmed against Nuked-SC55 mcu_opcodes.cpp
+	# MCU_Jump_JMP, operand=0x10 branch (mcu.pc = addr, CP preserved).
+	# Earlier slaspec incorrectly modeled this as an indirect through a
+	# DP-banked pointer; the bytes are a direct 24-bit target = CP:addr16.
+	# absoffs16 carries the resolved page-0x?:addr16 address, derived from
+	# inst_next's high byte (the currentCS idiom).
+	pcNext:3 = inst_next;
+	CP = pcNext[16,8];
+	goto absoffs16;
 }
 :jmp       "@("^disp8^":8,"^Rs_banked^")"  is opcode_special=0x11; opcode=28 & Rs_banked; disp8 
 {
@@ -1598,8 +1659,18 @@ absaddr24: "@"^addr24^":24" is addr24 { export * addr24; }
 
 # PJMP  @aa:24             Page jump
 #       no flags
-:pjmp      absaddr24 is opcode_special=0x13; absaddr24 { goto absaddr24; }
-:pjmp      "@"^Rs24        is opcode_special=0x11; opcode=0x19 & Rs24 { goto [Rs24]; }
+# The page-form PJMP carries an absolute 24-bit target, so we know at decode
+# time which page execution moves to. Propagate the high byte of the target
+# into CP_ctx so any code reachable from the destination is disassembled
+# with the right page context.
+:pjmp      absaddr24 is opcode_special=0x13; addr24 & absaddr24
+    [CP_ctx = (addr24 >> 16) & 0xff; globalset(addr24, CP_ctx);]
+{
+    local tgt:3 = addr24:3;
+    CP = tgt[16,8];
+    goto absaddr24;
+}
+:pjmp      "@"^Rs24        is opcode_special=0x11; opcode=0x19 & Rs24 { CP = Rs24[16,8]; goto [Rs24]; }
 
 # JSR   <EA>               Jump to subroutine
 #       no flags
@@ -1611,26 +1682,32 @@ absaddr24: "@"^addr24^":24" is addr24 { export * addr24; }
 	  addr:3 = (zext(CP) << 16) | zext(*:2 Rn_banked);
 	    call   [addr];
 }
-:jsr       "@"^addr16^":16" is opcode_special=0x18; addr16
+:jsr       absoffs16 is opcode_special=0x18; addr16 & absoffs16
 {
+	# Same-page call: derive CP from inst_next (where the JSR itself lives)
+	# rather than from any tracked register. Mirrors Ghidra x86 real-mode's
+	# `currentCS` idiom (ia.sinc:1107). absoffs16 carries the resolved
+	# 24-bit target as a constructor-local symbol, which makes Ghidra's
+	# operand-level reference point at the right address.
 	pcNext:3 = inst_next;
 	SP24 = SP24 - 2;
 	*:2 SP24 = pcNext[0,16];
-	addr:3 = (zext(CP) << 16) | addr16;
-	call [addr];
+	CP = pcNext[16,8];
+	call absoffs16;
 }
 
 # PJSR  <EA>               Page jump to subroutine
 #       no flags
-:pjsr    absaddr24  is opcode_special=3; absaddr24
+:pjsr    absaddr24  is opcode_special=3; addr24 & absaddr24
+    [CP_ctx = (addr24 >> 16) & 0xff; globalset(addr24, CP_ctx);]
 {
     pcNext:3 = inst_next;
 	    SP24 = SP24 - 2;
 	*:2 SP24 = pcNext[0,16];
 	    SP24 = SP24 - 2;
 	*:2 SP24 = zext(pcNext[16,8]);
-	#   CP   = (absaddr24(2));      # may not be necessary, since I've aligned CP with PC, and the `call` instruction will set the whole 24-bit register
-	  #addr:3 = absaddr24;
+	    local tgt:3 = addr24:3;
+	    CP = tgt[16,8];          # update runtime CP so intra-callee JSRs resolve correctly
 	    call    absaddr24 ;
 }
 :pjsr       "@"^Rs24      is opcode_special=0x11; opcode=0x18 & Rs24
@@ -1640,6 +1717,7 @@ absaddr24: "@"^addr24^":24" is addr24 { export * addr24; }
 	*:2 SP24 = pcNext[0,16];
 	    SP24 = SP24 - 2;
 	*:2 SP24 = zext(pcNext[16,8]);
+	    CP = Rs24[16,8];
 	    call   [Rs24];
 }
 #:pjsr      "@"^Rs        is opcode_special=0x11; Rs & opcode=0x18 
@@ -1715,31 +1793,37 @@ absaddr24: "@"^addr24^":24" is addr24 { export * addr24; }
 #       no flags
 :prts                                   is opcode_special=0x11; opcode_special=0x19
 {
-	cp24:3 = zext(*:2 SP24) << 16;
+	cpVal:2 = *:2 SP24;
+	cp24:3 = zext(cpVal) << 16;
 	SP24 = SP24 + 2;
 	pc24:3  = zext(*:2 SP24) | cp24;
 	SP24 = SP24 + 2;
+	CP = cpVal[0,8];               # restore runtime CP from the popped 2-byte slot (low byte holds CP, high is zero-padding)
 	return [pc24];
 }
 
 # PRTD  #xx                Page return and deallocate
 #       no flags
-:prtd    s8                             is opcode_special=0x11; opcode_special=0x14; s8 
+:prtd    s8                             is opcode_special=0x11; opcode_special=0x14; s8
 {
-	cp24:3 = zext(*:1 SP24) << 16;
+	cpVal:1 = *:1 SP24;
+	cp24:3 = zext(cpVal) << 16;
 	SP24 = SP24 + 2;
 	pc24:3  = zext(*:2 SP24) | cp24;
 	SP24 = SP24 + 2;
 	SP24 = SP24 + sext(s8);
+	CP = cpVal;
 	return [pc24];
 }
 :prtd    s16                            is opcode_special=0x11; opcode_special=0x1C; s16
 {
-	cp24:3 = zext(*:1 SP24) << 16;
+	cpVal:1 = *:1 SP24;
+	cp24:3 = zext(cpVal) << 16;
 	SP24 = SP24 + 2;
 	pc24:3  = zext(*:2 SP24) | cp24;
 	SP24 = SP24 + 2;
 	SP24 = SP24 + sext(s16);
+	CP = cpVal;
 	return [pc24];
 }
 

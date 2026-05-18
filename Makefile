@@ -1,4 +1,4 @@
-GHIDRADIR := ${HOME}/Downloads/ghidra/ghidra_11.1_DEV
+GHIDRADIR := ${HOME}/ghidra_12.0.4_PUBLIC
 PROCDIR := $(GHIDRADIR)/Ghidra/Processors/h8
 #DEBUGARGS := -x -u -l -n -t -c -f -o
 DEBUGARGS := 
@@ -6,7 +6,7 @@ SLEIGHARGS := $(DEBUGARGS) -a
 #SLEIGHARGS := $(DEBUGARGS) h8520
 
 build:
-	$(GHIDRADIR)/support/sleigh $(SLEIGHARGS) $$PWD
+	sleigh $(SLEIGHARGS) $$PWD
 
 install:
 	mkdir -p $(PROCDIR)/data/languages
