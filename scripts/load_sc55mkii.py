@@ -160,6 +160,70 @@ PERIPHERAL_REGS = [
     (0x7F, "P9DR",       "Port 9 data"),
 ]
 
+# Roland-custom PCM/wave chip register block at CPU 0xE000-0xE03F (64 bytes).
+# Offsets and behaviour cross-referenced from Nuked-SC55 pcm.cpp (PCM_Read /
+# PCM_Write). Each (offset, name, comment) labels one byte; the chip is
+# strongly access-pattern oriented, so a write sequence like
+# "0xE03E (select_channel) -> 0xE004..0xE007 (RAM1 window write)" is one
+# logical operation. Labels capture the per-byte role so the listing reads
+# clean; the access-pattern semantics are in comments.
+PCM_REG_BASE = 0xE000
+PCM_REGS = [
+    # Voice-enable bitmap (28 voices on mkII). Reading any byte in 0x00-0x03
+    # latches the pending mask into the live mask.
+    (0x00, "PCM_VOICE_MASK_B3", "Voice enable bits 27..24 (write); latches mask on read"),
+    (0x01, "PCM_VOICE_MASK_B2", "Voice enable bits 23..16 (write)"),
+    (0x02, "PCM_VOICE_MASK_B1", "Voice enable bits 15..8 (write)"),
+    (0x03, "PCM_VOICE_MASK_B0", "Voice enable bits 7..0 (write)"),
+
+    # 24-bit RAM1 window. 3 four-byte slots in 0x04-0x0F (bank0), 3 more in
+    # 0x24-0x2F (bank1). Slot index inside ram1[channel][8] is built from
+    # bits 5 (high), 3 (set->bit2), 2 (set->bit1) of the address. Selected
+    # channel comes from 0xE03E. Byte 0 of each slot returns the read latch;
+    # bytes 1/2/3 stage upper-4/mid-8/low-8 bits of the 24-bit value, with
+    # byte-3 write triggering the commit.
+    (0x04, "PCM_RAM1_BANK0_W0", "RAM1 access window 0 (4 bytes; sel ch via 0xE03E)"),
+    (0x08, "PCM_RAM1_BANK0_W1", "RAM1 access window 1 (4 bytes)"),
+    (0x0C, "PCM_RAM1_BANK0_W2", "RAM1 access window 2 (4 bytes)"),
+    (0x24, "PCM_RAM1_BANK1_W0", "RAM1 access window 3 (4 bytes; bit 5 = bank1)"),
+    (0x28, "PCM_RAM1_BANK1_W1", "RAM1 access window 4 (4 bytes)"),
+    (0x2C, "PCM_RAM1_BANK1_W2", "RAM1 access window 5 (4 bytes)"),
+
+    # 16-bit RAM2 window. 8 two-byte slots in 0x10-0x1F (bank0), 4 more in
+    # 0x30-0x37 (bank1). Slot index inside ram2[channel][16] from bits 5
+    # (high), 4..1 (low 3). Byte 0 = upper, byte 1 = lower + commit.
+    (0x10, "PCM_RAM2_BANK0_W0", "RAM2 access window 0 (2 bytes; sel ch via 0xE03E)"),
+    (0x12, "PCM_RAM2_BANK0_W1", "RAM2 access window 1 (2 bytes)"),
+    (0x14, "PCM_RAM2_BANK0_W2", "RAM2 access window 2 (2 bytes)"),
+    (0x16, "PCM_RAM2_BANK0_W3", "RAM2 access window 3 (2 bytes)"),
+    (0x18, "PCM_RAM2_BANK0_W4", "RAM2 access window 4 (2 bytes)"),
+    (0x1A, "PCM_RAM2_BANK0_W5", "RAM2 access window 5 (2 bytes)"),
+    (0x1C, "PCM_RAM2_BANK0_W6", "RAM2 access window 6 (2 bytes)"),
+    (0x1E, "PCM_RAM2_BANK0_W7", "RAM2 access window 7 (2 bytes)"),
+    (0x30, "PCM_RAM2_BANK1_W0", "RAM2 access window 8 (2 bytes; bit 5 = bank1)"),
+    (0x32, "PCM_RAM2_BANK1_W1", "RAM2 access window 9 (2 bytes)"),
+    (0x34, "PCM_RAM2_BANK1_W2", "RAM2 access window 10 (2 bytes)"),
+    (0x36, "PCM_RAM2_BANK1_W3", "RAM2 access window 11 (2 bytes)"),
+
+    # Wave ROM read port: write upper/mid/low to 0x21/0x22/0x23 (low write
+    # triggers the ROM fetch), then read 0xE03F for the byte.
+    (0x21, "PCM_WAVE_ADDR_HI",  "Wave ROM read addr bits 23..16 (write)"),
+    (0x22, "PCM_WAVE_ADDR_MID", "Wave ROM read addr bits 15..8 (write)"),
+    (0x23, "PCM_WAVE_ADDR_LO",  "Wave ROM read addr bits 7..0 (write; triggers fetch)"),
+
+    # 24-bit read latch (populated by reading 0x04-0x0F or 0x24-0x2F slot
+    # base bytes). Drained MSB-first via 0x39/0x3A/0x3B.
+    (0x39, "PCM_READ_LATCH_HI4","Read latch upper 4 bits (drain MSB first)"),
+    (0x3A, "PCM_READ_LATCH_MID","Read latch middle 8 bits"),
+    (0x3B, "PCM_READ_LATCH_LO", "Read latch lower 8 bits"),
+
+    # Config + channel select.
+    (0x3C, "PCM_CONFIG_3C",     "Config word: tempo/loop/IRQ enable (PCM_GetConfig)"),
+    (0x3D, "PCM_CONFIG_SLOTS",  "Active slot count: ((value & 31) + 1)"),
+    (0x3E, "PCM_SELECT_CHANNEL","Selects RAM1/RAM2 channel (data & 0x1F); read = status, also clears IRQ"),
+    (0x3F, "PCM_WAVE_BYTE_LATCH","Last wave-ROM byte fetched (read)"),
+]
+
 # ----------------------------------------------------------------------------
 # Helpers
 # ----------------------------------------------------------------------------
@@ -305,6 +369,12 @@ def main():
     for off, name, comment in PERIPHERAL_REGS:
         add_label(0xFF80 + off, name, comment)
     print("  + %d peripheral registers labelled" % len(PERIPHERAL_REGS))
+
+    print("")
+    print("--- PCM register labels (0xE000 base) ---")
+    for off, name, comment in PCM_REGS:
+        add_label(PCM_REG_BASE + off, name, comment)
+    print("  + %d PCM registers labelled" % len(PCM_REGS))
 
     print("")
     print("Done. Recommended next steps:")

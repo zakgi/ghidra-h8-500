@@ -1251,6 +1251,19 @@ absoffs16: reloc is addr16       [ reloc=(inst_next & 0xFF0000) | addr16; ] { ex
 :cmp:"g.b"    i8,eab_abs16             is eab_abs16;     opcode_special=4; i8  { subflags(eab_abs16, i8); }
 :cmp:"g.b"    i8,eaw_abs16             is eaw_abs16;     opcode_special=4; i8  { subflags(eaw_abs16, zext(i8)); } # TODO: Confirm in hardware if this opcode zero- or sign-extends the immediate.
 :cmp:"g.b"    i8,eab_imm8              is eab_imm8;      opcode_special=4; i8  { subflags(eab_imm8, i8); }
+
+# CMP:G.W  #imm:8, <word_EA>  -- word EA, 8-bit immediate (sign-extended)
+# H8/500 reads a single byte and sign-extends to 16 bits for a word compare.
+# Confirmed against Nuked-SC55 MCU_Opcode_MOVG_Immediate (opcode_reg==4 with
+# operand_size=WORD branch in mcu_opcodes.cpp:891). Mirror of the earlier
+# CMP:G.B i16 -> byte-EA patch; this is the converse direction.
+:cmp:"g.w"    i8,eaw_direct            is eaw_direct;    opcode_special=4; i8  { subflags(eaw_direct,   sext(i8)); }
+:cmp:"g.w"    i8,eaw_indirect          is eaw_indirect;  opcode_special=4; i8  { subflags(eaw_indirect, sext(i8)); }
+:cmp:"g.w"    i8,eaw_disp8             is eaw_disp8;     opcode_special=4; i8  { subflags(eaw_disp8,    sext(i8)); }
+:cmp:"g.w"    i8,eaw_disp16            is eaw_disp16;    opcode_special=4; i8  { subflags(eaw_disp16,   sext(i8)); }
+:cmp:"g.w"    i8,eaw_predec            is eaw_predec;    opcode_special=4; i8  { subflags(eaw_predec,   sext(i8)); }
+:cmp:"g.w"    i8,eaw_postinc           is eaw_postinc;   opcode_special=4; i8  { subflags(eaw_postinc,  sext(i8)); }
+:cmp:"g.w"    i8,eaw_abs8_br           is eaw_abs8_br;   opcode_special=4; i8  { subflags(eaw_abs8_br,  sext(i8)); }
 :cmp:"g.w"    i16,eaw_direct           is eaw_direct;    opcode_special=5; i16 { subflags(eaw_direct, i16); }
 :cmp:"g.w"    i16,eaw_indirect         is eaw_indirect;  opcode_special=5; i16 { subflags(eaw_indirect, i16); }
 :cmp:"g.w"    i16,eaw_disp8            is eaw_disp8;     opcode_special=5; i16 { subflags(eaw_disp8, i16); }
